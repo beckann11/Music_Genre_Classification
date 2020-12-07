@@ -1,0 +1,681 @@
+#########
+#Author: Becky Crawford
+#January 2019
+#University of Houston, Downtown - MSDA
+#########
+
+```{r}
+#Read in the files
+#label file
+tracks <- data.frame(read.csv("C:/Users/beck_/Documents/CAPSTONE/fma_metadata/tracks-edit2.csv", header = T))
+
+#Feature file from librosa
+#edited the raw file to concatenate the 3 rows of column heading into one column title
+librosa <- data.frame(read.csv("C:/Users/beck_/Documents/CAPSTONE/fma_metadata/features-edit.csv", header = T))
+
+#feature file from ec honest - spotify method
+#edited the raw file to concatenate the 3 rows of column heading into one column title
+echonest <- data.frame(read.csv("C:/Users/beck_/Documents/CAPSTONE/fma_metadata/echonest-edit.csv", header = T, na.strings=c(""," ","NA")))
+
+#remove columns that have NA values
+lib <- (librosa %>% select_if(~ !any(is.na(.))))
+ech <- (echonest %>% select_if(~ !any(is.na(.))))
+
+#merge the dataframes to add the genre to the features
+library(dplyr)
+label <- select(tracks,track_id, parent.genre)
+librosa <- inner_join(lib, label)
+echonest <- inner_join(ech, label)
+lib <- librosa
+ech <- echonest
+
+#make the genre column categorical
+lib <- filter(lib, parent.genre !="#N/A")
+ech <- filter(ech, parent.genre !="#N/A")
+lib$parent.genre <- factor(lib$parent.genre)
+ech$parent.genre <- factor(ech$parent.genre)
+levels(lib$parent.genre) <- c("X0","X1","X2","X3","X4","X5","X6","X7","X8","X9","X10","X11","X12", "X13", "X14", "X15")
+levels(ech$parent.genre) <- unique(ech$parent.genre)
+
+levels(ech$parent.genre) <- c("X0","X1","X2","X3","X4","X5","X6","X7","X8","X9","X10","X11","X12", "X13", "X14")
+```
+
+```{r}
+#Logistic regression to reduce the number of features
+#load required packages
+suppressMessages(library(nnet))
+suppressMessages(library(caret))
+suppressMessages(library(stats))
+suppressMessages(library(glmnet))
+
+#build a model to examine feature significance & remove insignificant features
+lib_predictors <- lib[,-520]
+
+fit_logit1 <- cv.glmnet(as.matrix(lib_predictors), lib$parent.genre, alpha = 0.5, nfolds = 10,
+                        type.measure = "class", nlambda = 200, family = "multinomial")
+summary(fit_logit1)
+```
+
+
+Only working on LIBROSA dataset from here below
+```{r}
+#Extract the significant features
+
+lib_small <- data.frame(select(lib_predictors, track_id, chroma_cens.mean.2, 	chroma_cens.mean.5, 	chroma_cens.mean.11, 	chroma_cens.mean.12, 	chroma_cens.median.4, 	chroma_cens.median.9, 	chroma_cens.min.1, 	chroma_cens.min.3, 	chroma_cens.min.4, 	chroma_cens.min.7, 	chroma_cens.min.9, 	chroma_cens.min.11, 	chroma_cens.std.1, 	chroma_cens.std.2, 	chroma_cens.std.5, 	chroma_cens.std.6, 	chroma_cens.std.7, 	chroma_cens.std.9, 	chroma_cens.std.10, 	chroma_cens.std.11, 	chroma_cqt.max.2, 	chroma_cqt.max.3, 	chroma_cqt.max.4, 	chroma_cqt.max.5, 	chroma_cqt.max.6, 	chroma_cqt.max.9, 	chroma_cqt.max.10, 	chroma_cqt.max.11, 	chroma_cqt.median.11, 	chroma_cqt.min.2, 	chroma_cqt.min.6, 	chroma_cqt.min.9, 	chroma_cqt.min.10, 	chroma_cqt.min.12, 	chroma_cqt.std.2, 	chroma_cqt.std.4, 	chroma_cqt.std.5, 	chroma_cqt.std.6, 	chroma_cqt.std.7, 	chroma_cqt.std.8, 	chroma_stft.max.2, 	chroma_stft.max.3, 	chroma_stft.max.7, 	chroma_stft.max.11, 	chroma_stft.mean.2, 	chroma_stft.mean.6, 	chroma_stft.mean.11, 	chroma_stft.min.3, 	chroma_stft.min.4, 	chroma_stft.min.7, 	chroma_stft.min.9, 	chroma_stft.min.10, 	chroma_stft.std.2, 	chroma_stft.std.3, 	chroma_stft.std.6, 	chroma_stft.std.8, 	chroma_stft.std.9, 	chroma_stft.std.10, 	chroma_stft.std.11, 	mfcc.skew.16, 	mfcc.skew.17, 	spectral_contrast.skew.1, 	spectral_contrast.skew.2, 	tonnetz.max.3, 	tonnetz.mean.2, 	tonnetz.mean.5, 	tonnetz.mean.6, 	tonnetz.median.1, 	tonnetz.median.6, 	tonnetz.min.1, 	tonnetz.min.4, 	tonnetz.std.3, 	tonnetz.std.4, 	tonnetz.std.5, 	tonnetz.std.6, 	zcr.max.1, 	zcr.min.1))
+
+dim(lib_small)
+
+```
+
+```{r}
+#split the transformed data into training and test
+lib_class <- lib$parent.genre
+lib <- cbind.data.frame(lib_small, lib_class)
+intrain_lib <- createDataPartition(y = lib$lib_class, p = 0.8,list = FALSE) #split data
+assign("training_lib", lib[intrain_lib,])
+assign("testing_lib",  lib[-intrain_lib,])
+dim(training_lib)
+dim(testing_lib)
+training_lib$lib_class <- factor(training_lib$lib_class)
+```
+
+
+```{r}
+#use SMOTE algorithm to balance classes
+#create synthetic data
+#must balance minority classes individually against the majority class 
+#first, slice the data to have one minority class against the majority class
+training_lib0 <- filter(training_lib, lib_class == "X0" | lib_class == "X11")
+training_lib1 <- filter(training_lib, lib_class == "X1" | lib_class == "X11")
+training_lib2 <- filter(training_lib, lib_class == "X2" | lib_class == "X11")
+training_lib3 <- filter(training_lib, lib_class == "X3" | lib_class == "X11")
+training_lib4 <- filter(training_lib, lib_class == "X4" | lib_class == "X11")
+training_lib5 <- filter(training_lib, lib_class == "X5" | lib_class == "X11")
+training_lib6 <- filter(training_lib, lib_class == "X6" | lib_class == "X11")
+training_lib7 <- filter(training_lib, lib_class == "X7" | lib_class == "X11")
+training_lib8 <- filter(training_lib, lib_class == "X8" | lib_class == "X11")
+training_lib9 <- filter(training_lib, lib_class == "X9" | lib_class == "X11")
+training_lib10 <- filter(training_lib, lib_class == "X10" | lib_class == "X11")
+training_lib12 <- filter(training_lib, lib_class == "X12" | lib_class == "X11")
+training_lib13 <- filter(training_lib, lib_class == "X13" | lib_class == "X11")
+training_lib14 <- filter(training_lib, lib_class == "X14" | lib_class == "X11")
+training_lib15 <- filter(training_lib, lib_class == "X15" | lib_class == "X11")
+
+#SMOTE for each minority class against the majority class
+SMOTE_lib0 <- function(training_lib0)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib0, perc.over=300, perc.under=0)
+  smote_Tlib
+}
+training_lib0$lib_class=factor(training_lib0$lib_class)
+
+lib_smote0 <- SMOTE_lib0(training_lib0)
+
+SMOTE_lib1 <- function(training_lib1)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib1, perc.over=100, perc.under=0)
+  smote_Tlib
+}
+training_lib1$lib_class=factor(training_lib1$lib_class)
+
+lib_smote1 <- SMOTE_lib1(training_lib1)
+
+SMOTE_lib2 <- function(training_lib2)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib2, perc.over=400, perc.under=0)
+  smote_Tlib
+}
+
+training_lib2$lib_class=factor(training_lib2$lib_class)
+
+lib_smote2 <- SMOTE_lib2(training_lib0)
+
+SMOTE_lib3 <- function(training_lib3)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib3, perc.over=13000, perc.under=0)
+  smote_Tlib
+}
+
+training_lib3$lib_class=factor(training_lib3$lib_class)
+
+lib_smote3 <- SMOTE_lib3(training_lib3)
+
+SMOTE_lib4 <- function(training_lib4)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib4, perc.over=6000, perc.under=0)
+  smote_Tlib
+}
+
+training_lib4$lib_class=factor(training_lib4$lib_class)
+
+lib_smote4 <- SMOTE_lib4(training_lib4)
+
+SMOTE_lib5 <- function(training_lib5)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib5, perc.over=300, perc.under=0)
+  smote_Tlib
+}
+training_lib5$lib_class=factor(training_lib5$lib_class)
+
+lib_smote5 <- SMOTE_lib5(training_lib5)
+
+SMOTE_lib6 <- function(training_lib6)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib6, perc.over=400, perc.under=0)
+  smote_Tlib
+}
+
+training_lib6$lib_class=factor(training_lib6$lib_class)
+
+lib_smote6 <- SMOTE_lib6(training_lib6)
+
+SMOTE_lib7 <- function(training_lib7)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib7, perc.over=700, perc.under=0)
+  smote_Tlib
+}
+
+training_lib7$lib_class=factor(training_lib7$lib_class)
+
+lib_smote7 <- SMOTE_lib7(training_lib7)
+
+SMOTE_lib8 <- function(training_lib8)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib8, perc.over=4000, perc.under=0)
+  smote_Tlib
+}
+
+training_lib8$lib_class=factor(training_lib8$lib_class)
+
+lib_smote8 <- SMOTE_lib8(training_lib8)
+
+SMOTE_lib9 <- function(training_lib9)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib9, perc.over=500, perc.under=0)
+  smote_Tlib
+}
+
+training_lib9$lib_class=factor(training_lib9$lib_class)
+
+lib_smote9 <- SMOTE_lib9(training_lib9)
+
+SMOTE_lib10 <- function(training_lib10)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib10, perc.over=3000, perc.under=0)
+  smote_Tlib
+}
+
+training_lib10$lib_class=factor(training_lib10$lib_class)
+
+lib_smote10 <- SMOTE_lib10(training_lib10)
+
+SMOTE_lib12 <- function(training_lib12)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib12, perc.over=900, perc.under=0)
+  smote_Tlib
+}
+
+training_lib12$lib_class=factor(training_lib12$lib_class)
+
+lib_smote12 <- SMOTE_lib12(training_lib12)
+
+SMOTE_lib13 <- function(training_lib13)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib13, perc.over=900, perc.under=0)
+  smote_Tlib
+}
+
+training_lib13$lib_class=factor(training_lib13$lib_class)
+
+lib_smote13 <- SMOTE_lib13(training_lib13)
+
+SMOTE_lib14 <- function(training_lib14)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib14, perc.over=4000, perc.under=0)
+  smote_Tlib
+}
+
+training_lib14$lib_class=factor(training_lib14$lib_class)
+
+lib_smote14 <- SMOTE_lib14(training_lib14)
+
+SMOTE_lib15 <- function(training_lib15)
+{
+  library(DMwR)
+  smote_Tlib <- SMOTE(lib_class ~ ., data = training_lib15, perc.over=2700, perc.under=0)
+  smote_Tlib
+}
+
+training_lib15$lib_class=factor(training_lib15$lib_class)
+
+lib_smote15 <- SMOTE_lib15(training_lib15)
+
+#bind the synthesized data to the original training set
+training_lib_smote <- rbind.data.frame(lib_smote0,lib_smote1, lib_smote2,lib_smote3,lib_smote4, lib_smote5, lib_smote6,lib_smote7,lib_smote8,lib_smote9,lib_smote10, lib_smote12, lib_smote13,lib_smote14,lib_smote15, training_lib)
+```
+
+Now that only significant features remain in the librosa and ec-honest datasets and class imbalance within the training set has been addressed, the data will be fed into a predictive model
+
+First, Support Vector Machines are established and then the training data is fed into them
+```{r}
+#librosa dataset first
+suppressMessages(library(kernlab))
+
+#remove any na values introduced through SMOTE
+training_lib <- (training_lib_smote %>% select_if(~ !any(is.na(.))))
+
+#Radial Kernel
+do.RadialKernelSVM <- function(training_lib)
+{
+  set.seed(2020)
+  tmpTraining_lib <- training_lib
+  tmpTraining_lib$lib_class <- NULL
+  sigma=sigest(as.matrix(tmpTraining_lib)) # sigest returns 3 values of sigma 
+  grid <- expand.grid(sigma = sigma , C = 2^seq(from=-4,by = 1, to =8)) # set up sigma and cost parameters
+  ctrl.cross <- trainControl(method = "cv", number = 5,classProbs = TRUE,savePredictions=TRUE, allowParallel = TRUE)
+  svm.Fit <- train(factor(lib_class) ~ ., data= training_lib,perProc = ("center"),
+                   method = 'svmRadial', 
+                   metric ='Accuracy',
+                   tuneGrid= grid,
+                   trControl = ctrl.cross
+  )
+  svm.Fit
+}
+
+rk_lib <- do.RadialKernelSVM(training_lib)
+summary(rk_lib)
+
+#Linear kernel svm
+do.LinearKernelSVM <- function(training_lib)
+{
+  set.seed(123)
+  grid <- expand.grid(C = 2^seq(from=-4,by = 1, to =8)) # set up cost parameter. For linear svm it doesn't have kernel parameter.
+  print("linear Kernel SVM")
+  ctrl.cross <- trainControl(method = "cv", number = 5,classProbs = TRUE,savePredictions=TRUE, allowParallel = TRUE)
+  svm.Fit <- train(lib_class ~ ., data= training_lib,perProc = ("center"),
+                   method = 'svmLinear', 
+                   metric ='Accuracy',
+                   tuneGrid= grid,
+                   trControl = ctrl.cross
+  )
+  svm.Fit
+}
+
+lk_lib <- do.LinearKernelSVM(training_lib)
+summary(lk_lib)
+
+#Polynomial kernel svm
+do.PolyKernelSVM <- function(training_lib)
+{
+  set.seed(123)
+  grid <- expand.grid(scale = 1, degree = c(1,2,3), C = 2^seq(from=-4,by = 1, to =8)) # set up sigma and cost parameters
+  print("Poly Kernel SVM") 
+  ctrl.cross <- trainControl(method = "cv", number = 5,classProbs = TRUE,savePredictions=TRUE, allowParallel = TRUE)
+  svm.Fit <- train(factor(training_lib$lib_class) ~ ., data= training_lib,perProc = ("center"),
+                   method = 'svmPoly', 
+                   metric ='Accuracy',
+                   tuneGrid= grid, 
+                   trControl = ctrl.cross
+  )
+  svm.Fit
+}
+
+pk_lib <- do.PolyKernelSVM(training_lib)
+summary(pk_lib)
+```
+
+
+Let's also evaluate a Random Forest Model for each dataset
+```{r}
+#####
+#Random Forest Models
+#####
+training_lib_smote$lib_class=factor(training_lib_smote$lib_class)
+
+#librosa dataset first
+do.RF <- function(training_lib_smote)
+{  
+  set.seed(847)
+  n <- (dim(training_lib_smote)[2])/2
+  gridRF <- expand.grid(mtry = seq(from=0,by=as.integer(n/10),to=n)[-1]) #may need to change this depend on your data size
+  ctrl.crossRF <- trainControl(method = "cv",number = 5,classProbs = TRUE,savePredictions = TRUE,allowParallel=TRUE)
+  rf.Fit <- train(lib_class ~ .,data = training_lib_smote, method = "rf",metric = "Accuracy", preProc = ("scale"), ntree = 25, tuneGrid = gridRF,trControl = ctrl.crossRF)
+  rf.Fit
+}
+
+training_lib_smote$lib_class=factor(training_lib_smote$lib_class)
+RF_lib_training <- do.RF(training_lib_smote)
+
+testing_lib$lib_class=factor(testing_lib$lib_class)
+Pred <-  predict(RF_lib_training,testing_lib)
+cm <- confusionMatrix(Pred,testing_lib$lib_class)
+print(cm)
+```
+
+
+
+Repeat for echonest
+```{r}
+#select only complete columns
+ech_predictors <- data.frame(ech[,-241])
+
+ech_a <- data.frame(select(ech_predictors, track_id, echonest.audio_features.acousticness, echonest.audio_features.danceability, echonest.audio_features.energy, echonest.audio_features.liveness, echonest.audio_features.speechiness, echonest.audio_features.tempo, echonest.audio_features.valence, echonest.temporal_features.3, echonest.temporal_features.4, echonest.temporal_features.5, echonest.temporal_features.6, echonest.temporal_features.7, echonest.temporal_features.8, echonest.temporal_features.9, echonest.temporal_features.10, echonest.temporal_features.11, echonest.temporal_features.14, echonest.temporal_features.15, echonest.temporal_features.16, echonest.temporal_features.17, echonest.temporal_features.24, echonest.temporal_features.25, echonest.temporal_features.26, echonest.temporal_features.27, echonest.temporal_features.28, echonest.temporal_features.29, echonest.temporal_features.30, echonest.temporal_features.31, echonest.temporal_features.32, echonest.temporal_features.33, echonest.temporal_features.34, echonest.temporal_features.35, echonest.temporal_features.49, echonest.temporal_features.51, echonest.temporal_features.52, echonest.temporal_features.53, echonest.temporal_features.54, echonest.temporal_features.55, echonest.temporal_features.56, echonest.temporal_features.57, echonest.temporal_features.58, echonest.temporal_features.59, echonest.temporal_features.60, echonest.temporal_features.61, echonest.temporal_features.62, echonest.temporal_features.63, echonest.temporal_features.64, echonest.temporal_features.65, echonest.temporal_features.66, echonest.temporal_features.67, echonest.temporal_features.68, echonest.temporal_features.69, echonest.temporal_features.70, echonest.temporal_features.71, echonest.temporal_features.72, echonest.temporal_features.73, echonest.temporal_features.74, echonest.temporal_features.75, echonest.temporal_features.76, echonest.temporal_features.77, echonest.temporal_features.78, echonest.temporal_features.79, echonest.temporal_features.80, echonest.temporal_features.81, echonest.temporal_features.82, echonest.temporal_features.83, echonest.temporal_features.84, echonest.temporal_features.85, echonest.temporal_features.86, echonest.temporal_features.87, echonest.temporal_features.88, echonest.temporal_features.89, echonest.temporal_features.90, echonest.temporal_features.91, echonest.temporal_features.92, echonest.temporal_features.93, echonest.temporal_features.94, echonest.temporal_features.95, echonest.temporal_features.96, echonest.temporal_features.97, echonest.temporal_features.98, echonest.temporal_features.99, echonest.temporal_features.100, echonest.temporal_features.101, echonest.temporal_features.102, echonest.temporal_features.103, echonest.temporal_features.104, echonest.temporal_features.105, echonest.temporal_features.106, echonest.temporal_features.107, echonest.temporal_features.108, echonest.temporal_features.109, echonest.temporal_features.110, echonest.temporal_features.112, echonest.temporal_features.114, echonest.temporal_features.115, echonest.temporal_features.116, echonest.temporal_features.117, echonest.temporal_features.120, echonest.temporal_features.121, echonest.temporal_features.122, echonest.temporal_features.123, echonest.temporal_features.124, echonest.temporal_features.125, echonest.temporal_features.126, echonest.temporal_features.127, echonest.temporal_features.128, echonest.temporal_features.129, echonest.temporal_features.130, echonest.temporal_features.131, echonest.temporal_features.135, echonest.temporal_features.136, echonest.temporal_features.137, echonest.temporal_features.138, echonest.temporal_features.139))
+ech_b <- data.frame(select(ech_predictors, echonest.temporal_features.140, echonest.temporal_features.141, echonest.temporal_features.142, echonest.temporal_features.143, echonest.temporal_features.144, echonest.temporal_features.145, echonest.temporal_features.146, echonest.temporal_features.147, echonest.temporal_features.148, echonest.temporal_features.149, echonest.temporal_features.150, echonest.temporal_features.151, echonest.temporal_features.152, echonest.temporal_features.153, echonest.temporal_features.154, echonest.temporal_features.155, echonest.temporal_features.156, echonest.temporal_features.157, echonest.temporal_features.158, echonest.temporal_features.159, echonest.temporal_features.160, echonest.temporal_features.161, echonest.temporal_features.162, echonest.temporal_features.163, echonest.temporal_features.164, echonest.temporal_features.165, echonest.temporal_features.166, echonest.temporal_features.167, echonest.temporal_features.168, echonest.temporal_features.169, echonest.temporal_features.170, echonest.temporal_features.171, echonest.temporal_features.172, echonest.temporal_features.173, echonest.temporal_features.174, echonest.temporal_features.175, echonest.temporal_features.176, echonest.temporal_features.177, echonest.temporal_features.178, echonest.temporal_features.179, echonest.temporal_features.180, echonest.temporal_features.181, echonest.temporal_features.182, echonest.temporal_features.183, echonest.temporal_features.184, echonest.temporal_features.185, echonest.temporal_features.186, echonest.temporal_features.187, echonest.temporal_features.188, echonest.temporal_features.189, echonest.temporal_features.190, echonest.temporal_features.191, echonest.temporal_features.192, echonest.temporal_features.193, echonest.temporal_features.194, echonest.temporal_features.195, echonest.temporal_features.196, echonest.temporal_features.197, echonest.temporal_features.198, echonest.temporal_features.199, echonest.temporal_features.200, echonest.temporal_features.201, echonest.temporal_features.202, echonest.temporal_features.206, echonest.temporal_features.207, echonest.temporal_features.208, echonest.temporal_features.209, echonest.temporal_features.210, echonest.temporal_features.211, echonest.temporal_features.212, echonest.temporal_features.213, echonest.temporal_features.214, echonest.temporal_features.215, echonest.temporal_features.216, echonest.temporal_features.217, echonest.temporal_features.218, echonest.temporal_features.219, echonest.temporal_features.220, echonest.temporal_features.221, echonest.temporal_features.222, echonest.temporal_features.223))
+
+ech_complete <- cbind.data.frame(ech_a, ech_b)
+```
+
+```{r}
+x <- model.matrix( ~ ., ech_complete)
+suppressMessages(library(nnet))
+suppressMessages(library(caret))
+suppressMessages(library(stats))
+suppressMessages(library(glmnet))
+ech_predictors2 <- ech_complete[,-1]
+ech_predictors2 <- (ech_predictors2 %>% select_if(~ !any(is.na(.))))
+
+ech_complete <- read.csv("C:/Users/beck_/Documents/CAPSTONE/ech_before_smote.csv", header = T)
+
+fit_logit2 <- cv.glmnet(as.matrix(ech_predictors2), ech$parent.genre, alpha = 0.5, nfolds = 10, type.measure = "class", nlambda = 200, family = "multinomial")
+print("Here is the model summary:")
+summary(fit_logit2)
+
+
+tmp2 <- coef(fit_logit2 ,s="lambda.min")
+print(tmp2)
+```
+
+
+```{r}
+#add class labels
+labels2 <- select(ech, track_id, parent.genre)
+ech_before_smote <- inner_join(ech_complete, labels2)
+
+#Extract the significant features
+ech_before_smote2 <- select(ech_before_smote, track_id, echonest.temporal_features.200, 	echonest.temporal_features.32, 	echonest.temporal_features.219, 	echonest.temporal_features.66, 	echonest.temporal_features.64, 	echonest.temporal_features.61, 	echonest.temporal_features.24, 	echonest.temporal_features.29, 	echonest.temporal_features.59, 	echonest.audio_features.energy, 	echonest.temporal_features.54, 	echonest.temporal_features.217, 	echonest.temporal_features.25, 	echonest.audio_features.speechiness, 	echonest.temporal_features.55, 	echonest.temporal_features.62, 	echonest.audio_features.danceability, 	echonest.temporal_features.60, 	echonest.temporal_features.9, 	echonest.temporal_features.34, 	echonest.temporal_features.53, 	echonest.temporal_features.33, echonest.temporal_features.8, 	echonest.temporal_features.63, 	echonest.audio_features.valence, 	echonest.temporal_features.26, 	echonest.temporal_features.11, 	echonest.temporal_features.17, 	echonest.temporal_features.27, parent.genre)
+
+```
+
+```{r}
+#split the transformed data into training and test
+ech_class <- ech_before_smote2$parent.genre
+ech <- ech_before_smote2
+intrain_ech <- createDataPartition(y = ech$parent.genre, p = 0.8,list = FALSE) #split data
+assign("training_ech", ech[intrain_ech,])
+assign("testing_ech",  ech[-intrain_ech,])
+dim(training_ech)
+dim(testing_ech)
+training_ech$parent.genre <- factor(training_ech$parent.genre)
+```
+
+
+```{r}
+#use SMOTE algorithm to balance classes
+#create synthetic data
+#first, slice the data to have one minority class against the majority class
+training_ech0 <- filter(training_ech, parent.genre == "X0" | parent.genre == "X7")
+training_ech1 <- filter(training_ech, parent.genre == "X1" | parent.genre == "X7")
+training_ech2 <- filter(training_ech, parent.genre == "X2" | parent.genre == "X7")
+training_ech3 <- filter(training_ech, parent.genre == "X3" | parent.genre == "X7")
+training_ech4 <- filter(training_ech, parent.genre == "X4" | parent.genre == "X7")
+training_ech5 <- filter(training_ech, parent.genre == "X5" | parent.genre == "X7")
+training_ech6 <- filter(training_ech, parent.genre == "X6" | parent.genre == "X7")
+training_ech8 <- filter(training_ech, parent.genre == "X8" | parent.genre == "X7")
+training_ech9 <- filter(training_ech, parent.genre == "X9" | parent.genre == "X7")
+training_ech10 <- filter(training_ech, parent.genre == "X10" | parent.genre == "X7")
+training_ech11 <- filter(training_ech, parent.genre == "X11" | parent.genre == "X7")
+training_ech12 <- filter(training_ech, parent.genre == "X12" | parent.genre == "X7")
+training_ech13 <- filter(training_ech, parent.genre == "X13" | parent.genre == "X7")
+training_ech14 <- filter(training_ech, parent.genre == "X14" | parent.genre == "X7")
+
+#X0 SMOTE
+SMOTE_ech0 <- function(training_ech0)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech0, perc.over=600, perc.under=0)
+  smote_Tech
+}
+training_ech0$parent.genre=factor(training_ech0$parent.genre)
+ech_smote0 <- SMOTE_ech0(training_ech0)
+
+#X1 SMOTE
+SMOTE_ech1 <- function(training_ech1)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech1, perc.over=3300, perc.under=0)
+  smote_Tech
+}
+training_ech1$parent.genre=factor(training_ech1$parent.genre)
+ech_smote1 <- SMOTE_ech1(training_ech1)
+
+#X2 SMOTE
+SMOTE_ech2 <- function(training_ech2)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech2, perc.over=900, perc.under=0)
+  smote_Tech
+}
+training_ech2$parent.genre=factor(training_ech2$parent.genre)
+ech_smote2 <- SMOTE_ech2(training_ech2)
+
+#X3 SMOTE
+SMOTE_ech3 <- function(training_ech3)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech3, perc.over=1200, perc.under=0)
+  smote_Tech
+}
+training_ech3$parent.genre=factor(training_ech3$parent.genre)
+ech_smote3 <- SMOTE_ech3(training_ech3)
+
+#X4 SMOTE
+SMOTE_ech4 <- function(training_ech4)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech4, perc.over=1000, perc.under=0)
+  smote_Tech
+}
+training_ech4$parent.genre=factor(training_ech4$parent.genre)
+ech_smote4 <- SMOTE_ech4(training_ech4)
+
+#X5 SMOTE
+SMOTE_ech5 <- function(training_ech5)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech5, perc.over=20000, perc.under=0)
+  smote_Tech
+}
+training_ech5$parent.genre=factor(training_ech5$parent.genre)
+ech_smote5 <- SMOTE_ech5(training_ech5)
+
+#X6 SMOTE
+SMOTE_ech6 <- function(training_ech6)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech6, perc.over=300, perc.under=0)
+  smote_Tech
+}
+training_ech6$parent.genre=factor(training_ech6$parent.genre)
+ech_smote6 <- SMOTE_ech6(training_ech6)
+
+#X8 SMOTE
+SMOTE_ech8 <- function(training_ech8)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech8, perc.over=1000, perc.under=0)
+  smote_Tech
+}
+training_ech8$parent.genre=factor(training_ech8$parent.genre)
+ech_smote8 <- SMOTE_ech8(training_ech8)
+
+#X9 SMOTE
+SMOTE_ech9 <- function(training_ech9)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech9, perc.over=15000, perc.under=0)
+  smote_Tech
+}
+training_ech9$parent.genre=factor(training_ech9$parent.genre)
+ech_smote9 <- SMOTE_ech9(training_ech9)
+
+#X10 SMOTE
+SMOTE_ech10 <- function(training_ech10)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech10, perc.over=200, perc.under=0)
+  smote_Tech
+}
+training_ech10$parent.genre=factor(training_ech10$parent.genre)
+ech_smote10 <- SMOTE_ech10(training_ech10)
+
+#X11 SMOTE
+SMOTE_ech11 <- function(training_ech11)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech11, perc.over=300, perc.under=0)
+  smote_Tech
+}
+training_ech11$parent.genre=factor(training_ech11$parent.genre)
+ech_smote11 <- SMOTE_ech11(training_ech11)
+
+
+#X12 SMOTE
+SMOTE_ech12 <- function(training_ech12)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech12, perc.over=300, perc.under=0)
+  smote_Tech
+}
+training_ech12$parent.genre=factor(training_ech12$parent.genre)
+ech_smote12 <- SMOTE_ech12(training_ech12)
+
+
+#X13 SMOTE
+SMOTE_ech13 <- function(training_ech13)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech13, perc.over=1800, perc.under=0)
+  smote_Tech
+}
+training_ech13$parent.genre=factor(training_ech13$parent.genre)
+ech_smote13 <- SMOTE_ech13(training_ech13)
+
+
+#X14 SMOTE
+SMOTE_ech14 <- function(training_ech14)
+{
+  library(DMwR)
+  smote_Tech <- SMOTE(parent.genre ~ ., data = training_ech14, perc.over=2500, perc.under=0)
+  smote_Tech
+}
+training_ech14$parent.genre=factor(training_ech14$parent.genre)
+ech_smote14 <- SMOTE_ech14(training_ech14)
+
+#bind the synthesized data to the original training set
+training_ech_smote <- rbind.data.frame(ech_smote0, ech_smote1, ech_smote2, ech_smote3, ech_smote4, ech_smote5, ech_smote6,ech_smote8,ech_smote9,ech_smote10, ech_smote11, ech_smote12, ech_smote13,ech_smote14, training_ech)
+dim(training_ech)
+dim(training_ech_smote)
+```
+
+Now that only significant features remain in the librosa and ec-honest datasets and class imbalance within the training set has been addressed, the data will be fed into a predictive model
+
+First, Support Vector Machines are established and then the training data is fed into them
+
+Apply the same algorithms for echonest
+```{r}
+#echonest dataset second
+#Radial basis kernel svm from CARET
+do.RadialKernelSVM <- function(training_ech)
+{
+  set.seed(123)
+  tmpTraining_ech <- training_ech
+  tmpTraining_ech$parent.genre <- NULL
+  sigma=sigest(as.matrix(tmpTraining_ech)) # sigest returns 3 values of sigma 
+  grid <- expand.grid(sigma = sigma , C = 2^seq(from=-4,by = 1, to =8)) # set up sigma and cost parameters
+  ctrl.cross <- trainControl(method = "cv", number = 5,classProbs = TRUE,savePredictions=TRUE, allowParallel = TRUE)
+  svm.Fit <- train(parent.genre ~ ., data= training_ech,perProc = ("center"),
+                   method = 'svmRadial', 
+                   metric ='Accuracy',
+                   tuneGrid= grid,
+                   trControl = ctrl.cross
+  )
+  svm.Fit
+}
+
+#Linear kernel svm
+do.LinearKernelSVM <- function(training_ech)
+{
+  set.seed(123)
+  grid <- expand.grid(C = 2^seq(from=-4,by = 1, to =8)) # set up cost parameter. For linear svm it doesn't have kernel parameter.
+  print("linear Kernel SVM")
+  ctrl.cross <- trainControl(method = "cv", number = 5,classProbs = TRUE,savePredictions=TRUE, allowParallel = TRUE)
+  svm.Fit <- train(parent.genre ~ ., data= training_ech,perProc = ("center"),
+                   method = 'svmLinear', 
+                   metric ='Accuracy',
+                   tuneGrid= grid,
+                   trControl = ctrl.cross
+  )
+  svm.Fit
+}
+
+#Polynomial kernel svm
+do.PolyKernelSVM <- function(training_ech)
+{
+  set.seed(123)
+  grid <- expand.grid(scale = 1, degree = c(1,2,3), C = 2^seq(from=-4,by = 1, to =8)) # set up sigma and cost parameters
+  print("Poly Kernel SVM") 
+  ctrl.cross <- trainControl(method = "cv", number = 5,classProbs = TRUE,savePredictions=TRUE, allowParallel = TRUE)
+  svm.Fit <- train(parent.genre ~ ., data= training_ech,perProc = ("center"),
+                   method = 'svmPoly', 
+                   metric ='Accuracy',
+                   tuneGrid= grid, 
+                   trControl = ctrl.cross
+  )
+  svm.Fit
+}
+
+do.RadialKernelSVM(training_ech)
+do.LinearKernelSVM(training_ech)
+do.PolyKernelSVM(training_ech)
+```
+
+
+Let's also evaluate a Random Forest Model for each dataset
+```{r}
+#####
+#Random Forest Models
+#####
+
+#echonest dataset second
+do.RF <- function(training_ech_smote)
+{  
+  set.seed(313)
+  n <- dim(training_ech_smote)[2]/2
+  gridRF <- expand.grid(mtry = seq(from=0,by=as.integer(n/10),to=n)[-1]) #may need to change this depend on your data size
+  ctrl.crossRF <- trainControl(method = "cv",number = 10,classProbs = TRUE,savePredictions = TRUE,allowParallel=TRUE)
+  rf.Fit <- train(parent.genre ~ .,data = training_ech_smote,method = "rf",metric = "Accuracy",preProc = ( "scale"), ntree = 100, tuneGrid = gridRF,trControl = ctrl.crossRF)
+  rf.Fit
+}
+
+training_ech_smote$parent.genre=factor(training_ech_smote$parent.genre)
+RF_ech_training <- do.RF(training_ech_smote)
+
+testing_ech$parent.genre=factor(testing_ech$parent.genre)
+Pred2 <-  predict(RF_ech_training,testing_ech)
+cm2 <- confusionMatrix(Pred2,testing_ech$parent.genre)
+print(cm2)
+```
